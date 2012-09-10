@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include "xenctrlosdep.h"
 #include <sys/ioctl.h>
+#include <sys/wait.h>
 #include <xc_private.h>
 
 void sigint_handler(int sig)
@@ -26,7 +27,7 @@ do {                            \
     exit(1);                    \
 } while(0)
 
-#define PAGES   16
+#define PAGES   32
 
 uint32_t domid;
 int paging_port;
@@ -178,6 +179,8 @@ void mapper(int fd, unsigned long *arr, char *matches)
     /* Map a yes-no-yes pattern, the one in the middle should work */
     map_and_retry_batch(arr + 5, 1, matches + 5);
     map_and_retry_batch(arr + 3, 3, matches + 3);
+
+    printf("Mappings completed successfully\n");
 }
 
 void cleanup(void)
@@ -189,10 +192,13 @@ void cleanup(void)
     xc_interface_close(xch);
 }
 
+/* How many pages will be paged-in. Coarse way to kill the pager loop. */
+#define TEST_LENGTH 14
+
 int main(int argc, char *argv[])
 {
     uint32_t remote_port;
-    int i, pending_port, rc, pipe_fd[2];
+    int i, status, pending_port, rc, pipe_fd[2];
     xen_domain_handle_t handle = {0};
     unsigned long hap_alloc_mb = 1;
     unsigned long pfn, frames_array[PAGES];
@@ -200,6 +206,7 @@ int main(int argc, char *argv[])
     xen_pfn_t _pfn;
     void *buf;
     pid_t child;
+    unsigned int page_ins = 0;
 
     mem_event_back_ring_t paging_ring;
     mem_event_sring_t *ring_mmap = NULL;
@@ -379,7 +386,7 @@ int main(int argc, char *argv[])
             if ( rc )
                 DIE("Page in of pfn %lx failed rc %d errno %d",
                         pfn, rc, errno);
-
+                
             /* Manufacture identical response */
             rsp.gfn     = req.gfn;
             rsp.vcpu_id = req.vcpu_id;
@@ -400,8 +407,14 @@ int main(int argc, char *argv[])
             if ( rc )
                 DIE("Could not kick back paging port rc %d errno %d\n",
                     rc, errno);
+
+            if (++page_ins == TEST_LENGTH)
+                goto happy_ending;
         }
     }
 
+happy_ending:
+    waitpid(child, &status, 0);
+    printf("Unit test complete\n");
     return 0;
 }
